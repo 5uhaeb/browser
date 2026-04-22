@@ -7,6 +7,7 @@ export default function JoinPage({ onJoined }: { onJoined: (roomId: string, invi
   const [inviteCode, setInviteCode] = useState("");
   const [name, setName] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
   const [mode, setMode] = useState<"join" | "create">("join");
 
   const handleSubmit = async (e: FormEvent) => {
@@ -15,6 +16,7 @@ export default function JoinPage({ onJoined }: { onJoined: (roomId: string, invi
     const code = inviteCode.trim().toUpperCase();
     if (!displayName) return alert("Please enter a display name");
     
+    setErrorMessage("");
     setIsLoading(true);
     try {
       if (mode === "create") {
@@ -34,7 +36,9 @@ export default function JoinPage({ onJoined }: { onJoined: (roomId: string, invi
       }
     } catch (error) {
       console.error(error);
-      alert("Something went wrong");
+      const message = error instanceof Error ? error.message : "Something went wrong";
+      setErrorMessage(message);
+      alert(message);
     } finally {
       setIsLoading(false);
     }
@@ -114,6 +118,11 @@ export default function JoinPage({ onJoined }: { onJoined: (roomId: string, invi
               </>
             )}
           </button>
+          {errorMessage && (
+            <p className="text-xs leading-relaxed text-[#F87171] bg-[#7F1D1D]/20 border border-[#7F1D1D] rounded-lg p-3">
+              {errorMessage}
+            </p>
+          )}
         </form>
 
         <div className="mt-12 flex items-center gap-6 text-[10px] font-bold text-[#3F3F46] uppercase tracking-[0.1em]">

@@ -47,11 +47,11 @@ npm start
 
 ## Render
 
-Create a Web Service, not a Static Site.
+Create a Web Service, not a Static Site. Use the Docker environment.
 
 - Root directory: leave blank or use `.`
-- Build command: `npm run render-build`
-- Start command: `npm start`
+- Environment: Docker
+- Dockerfile path: `./Dockerfile`
 - Publish directory: leave blank
 
-`npm run render-build` installs Chromium and its Linux system dependencies with Playwright before building the app.
+The Docker image is based on Microsoft's official Playwright image, so Chromium and the Linux system dependencies are already present.
