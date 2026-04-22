@@ -1,0 +1,6 @@
+{
+  "name": "WatchParty",
+  "description": "A private browser streaming and watchparty app with real-time chat and ephemeral rooms.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}

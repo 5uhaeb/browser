@@ -1,0 +1,40 @@
+{
+  "name": "watchparty",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx server.ts",
+    "build": "vite build && esbuild server.ts --bundle --platform=node --format=esm --outfile=dist/server.js --external:playwright --external:vite",
+    "preview": "vite preview",
+    "clean": "node -e \"fs.rmSync('dist', { recursive: true, force: true })\"",
+    "lint": "tsc --noEmit",
+    "start": "node -e \"process.env.NODE_ENV='production'; import('./dist/server.js')\""
+  },
+  "dependencies": {
+    "@google/genai": "^1.29.0",
+    "@tailwindcss/vite": "^4.1.14",
+    "@vitejs/plugin-react": "^5.0.4",
+    "dotenv": "^17.2.3",
+    "express": "^4.21.2",
+    "lucide-react": "^0.546.0",
+    "motion": "^12.23.24",
+    "nanoid": "^5.1.9",
+    "playwright": "^1.59.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "socket.io": "^4.8.3",
+    "socket.io-client": "^4.8.3",
+    "vite": "^6.2.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.14.0",
+    "autoprefixer": "^10.4.21",
+    "tailwindcss": "^4.1.14",
+    "esbuild": "^0.25.11",
+    "tsx": "^4.21.0",
+    "typescript": "~5.8.2",
+    "vite": "^6.2.0"
+  }
+}
