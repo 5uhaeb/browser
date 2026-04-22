@@ -17,6 +17,13 @@ interface ChatMessage {
   timestamp: number;
 }
 
+interface DrmEvent {
+  type: "eme-request" | "media-keys" | "encrypted-event";
+  keySystem?: string;
+  url: string;
+  timestamp: number;
+}
+
 const REMOTE_VIEWPORT = { width: 1024, height: 576 };
 
 export default function RoomPage({ roomId, inviteCode, userName, onLeave }: { roomId: string; inviteCode: string; userName: string; onLeave: () => void }) {
@@ -28,6 +35,7 @@ export default function RoomPage({ roomId, inviteCode, userName, onLeave }: { ro
   const [tabCount, setTabCount] = useState(1);
   const [activeTabIndex, setActiveTabIndex] = useState(0);
   const [audioBlocked, setAudioBlocked] = useState(false);
+  const [drmEvents, setDrmEvents] = useState<DrmEvent[]>([]);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const audioQueueRef = useRef<string[]>([]);
@@ -90,6 +98,10 @@ export default function RoomPage({ roomId, inviteCode, userName, onLeave }: { ro
       if (!isPlayingAudioRef.current) playNextAudioChunk();
     });
 
+    socket.on("drm-event", (event) => {
+      setDrmEvents((current) => [event, ...current].slice(0, 5));
+    });
+
     socket.on("room-error", (err) => {
       alert(err);
       onLeave();
@@ -103,6 +115,7 @@ export default function RoomPage({ roomId, inviteCode, userName, onLeave }: { ro
       socket.off("browser-state-update");
       socket.off("stream-frame");
       socket.off("audio-chunk");
+      socket.off("drm-event");
       socket.off("room-error");
       if (wheelFrameRef.current !== null) cancelAnimationFrame(wheelFrameRef.current);
       setFrame((previousUrl) => {
@@ -291,6 +304,17 @@ export default function RoomPage({ roomId, inviteCode, userName, onLeave }: { ro
       <aside className="border-l border-[#27272A] bg-[#0F0F11] flex flex-col">
         <div className="flex-1 p-4 overflow-y-auto space-y-3">
           <AnimatePresence mode="popLayout">
+            {drmEvents.map((event) => (
+              <motion.div
+                key={`${event.timestamp}-${event.type}`}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="rounded-lg border border-[#7F1D1D] bg-[#7F1D1D]/20 p-3 text-xs text-[#FCA5A5]"
+              >
+                <div className="font-bold uppercase tracking-[0.12em]">DRM blocked</div>
+                <div className="mt-1 text-[#FECACA]">{event.type}{event.keySystem ? `: ${event.keySystem}` : ""}</div>
+              </motion.div>
+            ))}
             {messages.map((msg) => (
               <motion.div
                 key={msg.id}

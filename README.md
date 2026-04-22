@@ -38,6 +38,10 @@ BROWSER_EXTENSION_PATHS=/absolute/path/to/extension npm run dev
 
 On Windows, separate multiple paths with `;`. On Linux/macOS, separate multiple paths with `:`.
 
+## DRM Education Mode
+
+Set `DRM_BLOCKER=true` to block Encrypted Media Extensions in the remote browser and show DRM events in the room sidebar. This is for observing when a site requests protected playback; it does not bypass or decrypt DRM.
+
 ## Production
 
 ```sh

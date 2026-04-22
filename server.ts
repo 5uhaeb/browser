@@ -24,6 +24,13 @@ interface ChatMessage {
   timestamp: number;
 }
 
+interface DrmEvent {
+  type: "eme-request" | "media-keys" | "encrypted-event";
+  keySystem?: string;
+  url: string;
+  timestamp: number;
+}
+
 interface Room {
   id: string;
   inviteCode: string;
@@ -48,6 +55,7 @@ const rooms = new Map<string, Room>();
 const BROWSER_VIEWPORT = { width: 1024, height: 576 };
 const STREAM_FPS = Math.max(1, Math.min(Number(process.env.STREAM_FPS || 6), 12));
 const STREAM_JPEG_QUALITY = Math.max(20, Math.min(Number(process.env.STREAM_JPEG_QUALITY || 35), 80));
+const DRM_BLOCKER_ENABLED = process.env.DRM_BLOCKER === "true";
 const BROWSER_PERMISSIONS = [
   "clipboard-read",
   "clipboard-write",
@@ -105,6 +113,55 @@ async function wireBrowserPage(roomId: string, page: Page, io: Server) {
   await page.exposeFunction("watchPartyAudioChunk", (base64: string) => {
     io.to(roomId).emit("audio-chunk", base64);
   });
+
+  await page.exposeFunction("watchPartyDrmEvent", (event: DrmEvent) => {
+    io.to(roomId).emit("drm-event", event);
+  });
+
+  await page.addInitScript((enabled) => {
+    if (!enabled) return;
+
+    const windowWithDrm = window as typeof window & {
+      __watchPartyDrmBlockerInstalled?: boolean;
+      watchPartyDrmEvent?: (event: DrmEvent) => void;
+    };
+
+    if (windowWithDrm.__watchPartyDrmBlockerInstalled) return;
+    windowWithDrm.__watchPartyDrmBlockerInstalled = true;
+
+    const emitDrmEvent = (event: Omit<DrmEvent, "url" | "timestamp">) => {
+      windowWithDrm.watchPartyDrmEvent?.({
+        ...event,
+        url: window.location.href,
+        timestamp: Date.now(),
+      });
+    };
+
+    const block = (type: DrmEvent["type"], keySystem?: string) => {
+      emitDrmEvent({ type, keySystem });
+      return Promise.reject(new DOMException("DRM playback blocked by WatchParty education mode", "NotSupportedError"));
+    };
+
+    Object.defineProperty(navigator, "requestMediaKeySystemAccess", {
+      configurable: true,
+      value: (keySystem: string) => block("eme-request", keySystem),
+    });
+
+    if ("setMediaKeys" in HTMLMediaElement.prototype) {
+      HTMLMediaElement.prototype.setMediaKeys = function setMediaKeys() {
+        return block("media-keys");
+      };
+    }
+
+    document.addEventListener("encrypted", (event) => {
+      emitDrmEvent({
+        type: "encrypted-event",
+        keySystem: (event as MediaEncryptedEvent).initDataType,
+      });
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }, true);
+  }, DRM_BLOCKER_ENABLED);
 
   await page.addInitScript(() => {
     const windowWithAudio = window as typeof window & {
