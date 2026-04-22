@@ -10,6 +10,7 @@ Entry points:
 Common commands:
 - Dev: `npm run dev`
 - Build: `npm run build`
+- Render build: `npm run render-build`
 - Start: `npm start`
 - Lint/type-check: `npm run lint` (`tsc --noEmit`)
 

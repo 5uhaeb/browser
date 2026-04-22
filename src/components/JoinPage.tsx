@@ -19,8 +19,8 @@ export default function JoinPage({ onJoined }: { onJoined: (roomId: string, invi
     try {
       if (mode === "create") {
         const res = await fetch("/api/rooms", { method: "POST" });
-        if (!res.ok) throw new Error("Could not create a room");
         const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not create a room");
         onJoined(data.roomId, data.inviteCode, displayName);
       } else {
         if (!code) return alert("Please enter an invite code");

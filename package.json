@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "clean": "node -e \"fs.rmSync('dist', { recursive: true, force: true })\"",
     "lint": "tsc --noEmit",
+    "render-build": "npm ci && npx playwright install --with-deps chromium && npm run build",
     "start": "node -e \"process.env.NODE_ENV='production'; import('./dist/server.js')\""
   },
   "dependencies": {

@@ -95,6 +95,10 @@ function normalizeUrl(value: string) {
   return `https://${trimmed}`;
 }
 
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
 async function wireBrowserPage(roomId: string, page: Page, io: Server) {
   await page.exposeFunction("watchPartyAudioChunk", (base64: string) => {
     io.to(roomId).emit("audio-chunk", base64);
@@ -216,10 +220,11 @@ async function startServer() {
   app.post("/api/rooms", async (req, res) => {
     const inviteCode = nanoid(8).toUpperCase();
     const roomId = nanoid(12);
+    let userDataDir: string | null = null;
 
     try {
       const extensionPaths = getExtensionPaths();
-      const userDataDir = await mkdtemp(path.join(os.tmpdir(), "watchparty-"));
+      userDataDir = await mkdtemp(path.join(os.tmpdir(), "watchparty-"));
       const context = await chromium.launchPersistentContext(userDataDir, {
         headless: true,
         channel: extensionPaths.length > 0 ? "chromium" : undefined,
@@ -305,7 +310,13 @@ async function startServer() {
       res.json({ roomId, inviteCode });
     } catch (error) {
       console.error("Failed to launch browser:", error);
-      res.status(500).json({ error: "Could not start browser session" });
+      if (userDataDir) {
+        await rm(userDataDir, { recursive: true, force: true }).catch(() => {});
+      }
+      res.status(500).json({
+        error: "Could not start browser session. On Render, make sure the build command runs `npm run render-build`.",
+        details: getErrorMessage(error),
+      });
     }
   });
 

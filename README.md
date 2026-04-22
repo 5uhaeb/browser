@@ -44,3 +44,14 @@ On Windows, separate multiple paths with `;`. On Linux/macOS, separate multiple 
 npm run build
 npm start
 ```
+
+## Render
+
+Create a Web Service, not a Static Site.
+
+- Root directory: leave blank or use `.`
+- Build command: `npm run render-build`
+- Start command: `npm start`
+- Publish directory: leave blank
+
+`npm run render-build` installs Chromium and its Linux system dependencies with Playwright before building the app.
