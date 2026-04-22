@@ -25,7 +25,30 @@ export default function RoomPage({ roomId, inviteCode, userName, onLeave }: { ro
   const [browserUrl, setBrowserUrl] = useState("https://www.google.com");
   const [tabCount, setTabCount] = useState(1);
   const [activeTabIndex, setActiveTabIndex] = useState(0);
+  const [audioBlocked, setAudioBlocked] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const audioQueueRef = useRef<string[]>([]);
+  const isPlayingAudioRef = useRef(false);
+
+  const playNextAudioChunk = () => {
+    const audio = audioRef.current;
+    const nextChunk = audioQueueRef.current.shift();
+
+    if (!audio || !nextChunk) {
+      isPlayingAudioRef.current = false;
+      return;
+    }
+
+    isPlayingAudioRef.current = true;
+    audio.src = `data:audio/webm;codecs=opus;base64,${nextChunk}`;
+    audio.play()
+      .then(() => setAudioBlocked(false))
+      .catch(() => {
+        setAudioBlocked(true);
+        isPlayingAudioRef.current = false;
+      });
+  };
 
   useEffect(() => {
     const join = () => socket.emit("join-room", { roomId, name: userName });
@@ -53,6 +76,11 @@ export default function RoomPage({ roomId, inviteCode, userName, onLeave }: { ro
       setFrame(`data:image/jpeg;base64,${base64}`);
     });
 
+    socket.on("audio-chunk", (base64) => {
+      audioQueueRef.current.push(base64);
+      if (!isPlayingAudioRef.current) playNextAudioChunk();
+    });
+
     socket.on("room-error", (err) => {
       alert(err);
       onLeave();
@@ -65,6 +93,7 @@ export default function RoomPage({ roomId, inviteCode, userName, onLeave }: { ro
       socket.off("new-chat-message");
       socket.off("browser-state-update");
       socket.off("stream-frame");
+      socket.off("audio-chunk");
       socket.off("room-error");
     };
   }, [roomId, userName, onLeave]);
@@ -121,8 +150,14 @@ export default function RoomPage({ roomId, inviteCode, userName, onLeave }: { ro
     socket.emit("browser-control", { action, data: {} });
   };
 
+  const unlockAudio = () => {
+    setAudioBlocked(false);
+    if (!isPlayingAudioRef.current) playNextAudioChunk();
+  };
+
   return (
     <div className="grid grid-cols-[1fr_320px] grid-rows-[64px_1fr_64px] h-screen w-screen bg-[#0A0A0B] text-[#E4E4E7] font-sans overflow-hidden">
+      <audio ref={audioRef} onEnded={playNextAudioChunk} className="hidden" />
       {/* Header */}
       <header className="col-span-2 border-b border-[#27272A] flex items-center justify-between px-6 bg-[#0F0F11]">
         <div className="flex items-center gap-4">
@@ -137,6 +172,14 @@ export default function RoomPage({ roomId, inviteCode, userName, onLeave }: { ro
           <div className="flex items-center gap-3">
              <span className="text-xs text-[#71717A]">Latency: <span className="text-[#A1A1AA]">42ms</span></span>
              <span className="text-xs text-[#71717A]">Quality: <span className="text-[#A1A1AA]">1080p Source</span></span>
+             {audioBlocked && (
+               <button
+                 onClick={unlockAudio}
+                 className="text-xs text-[#38BDF8] hover:text-white transition-colors"
+               >
+                 Enable audio
+               </button>
+             )}
           </div>
         </div>
       </header>

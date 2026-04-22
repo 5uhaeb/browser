@@ -1,10 +1,13 @@
 import express from "express";
 import { createServer } from "http";
 import { Server } from "socket.io";
+import { existsSync } from "fs";
+import { mkdtemp, rm } from "fs/promises";
+import os from "os";
 import path from "path";
 import { nanoid } from "nanoid";
 import { chromium } from "playwright";
-import type { Browser, BrowserContext, Page } from "playwright";
+import type { BrowserContext, Page } from "playwright";
 
 // --- Types & Constants ---
 interface Participant {
@@ -30,8 +33,8 @@ interface Room {
   lastActivity: number;
   lastEmptyAt: number | null; // Track when the room became empty
   browser?: {
-    instance: Browser;
     context: BrowserContext;
+    userDataDir: string;
     activePageIndex: number;
     pages: Page[];
     streamInterval?: NodeJS.Timeout;
@@ -39,8 +42,51 @@ interface Room {
 }
 
 const ROOM_TTL = 1000 * 60 * 60; // 1 hour of inactivity
-const EMPTY_COOLDOWN = 1000 * 60; // Keep empty rooms for 1 min before deleting
+const EMPTY_COOLDOWN = 1000 * 10; // Remove ended sessions quickly, while tolerating quick reconnects
 const rooms = new Map<string, Room>();
+
+const BROWSER_VIEWPORT = { width: 1280, height: 720 };
+const BROWSER_PERMISSIONS = [
+  "clipboard-read",
+  "clipboard-write",
+  "camera",
+  "microphone",
+  "geolocation",
+  "notifications",
+  "payment-handler",
+] as const;
+
+function getExtensionPaths() {
+  return (process.env.BROWSER_EXTENSION_PATHS || "")
+    .split(path.delimiter)
+    .map((extensionPath) => extensionPath.trim())
+    .filter(Boolean)
+    .map((extensionPath) => path.resolve(extensionPath))
+    .filter((extensionPath) => {
+      if (existsSync(extensionPath)) return true;
+      console.warn(`Skipping missing extension path: ${extensionPath}`);
+      return false;
+    });
+}
+
+function getBrowserArgs(extensionPaths: string[]) {
+  const args = [
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-blink-features=AutomationControlled",
+    "--autoplay-policy=no-user-gesture-required",
+    "--use-fake-ui-for-media-stream",
+  ];
+
+  if (extensionPaths.length > 0) {
+    const extensionList = extensionPaths.join(",");
+    args.push(`--disable-extensions-except=${extensionList}`);
+    args.push(`--load-extension=${extensionList}`);
+  }
+
+  return args;
+}
 
 function normalizeUrl(value: string) {
   const trimmed = value.trim();
@@ -49,23 +95,108 @@ function normalizeUrl(value: string) {
   return `https://${trimmed}`;
 }
 
+async function wireBrowserPage(roomId: string, page: Page, io: Server) {
+  await page.exposeFunction("watchPartyAudioChunk", (base64: string) => {
+    io.to(roomId).emit("audio-chunk", base64);
+  });
+
+  await page.addInitScript(() => {
+    const windowWithAudio = window as typeof window & {
+      __watchPartyAudioInstalled?: boolean;
+      watchPartyAudioChunk?: (base64: string) => void;
+    };
+
+    if (windowWithAudio.__watchPartyAudioInstalled) return;
+    windowWithAudio.__watchPartyAudioInstalled = true;
+
+    let recorder: MediaRecorder | null = null;
+
+    const sendBlob = (blob: Blob) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const result = String(reader.result || "");
+        const base64 = result.split(",")[1];
+        if (base64) windowWithAudio.watchPartyAudioChunk?.(base64);
+      };
+      reader.readAsDataURL(blob);
+    };
+
+    const startAudio = (media: HTMLMediaElement) => {
+      if (recorder || typeof MediaRecorder === "undefined") return;
+
+      const mediaWithCapture = media as HTMLMediaElement & {
+        captureStream?: () => MediaStream;
+        mozCaptureStream?: () => MediaStream;
+      };
+      const captureStream = mediaWithCapture.captureStream?.bind(media) || mediaWithCapture.mozCaptureStream?.bind(media);
+      if (!captureStream) return;
+
+      const stream = captureStream();
+      if (stream.getAudioTracks().length === 0) return;
+
+      media.muted = false;
+      media.volume = 1;
+
+      const options = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? { mimeType: "audio/webm;codecs=opus" }
+        : undefined;
+      recorder = new MediaRecorder(stream, options);
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) sendBlob(event.data);
+      };
+      recorder.onstop = () => {
+        recorder = null;
+      };
+      recorder.start(500);
+    };
+
+    const scanForMedia = () => {
+      document.querySelectorAll("video,audio").forEach((element) => {
+        const media = element as HTMLMediaElement;
+        media.muted = false;
+        if (!media.paused) startAudio(media);
+        media.addEventListener("play", () => startAudio(media));
+      });
+    };
+
+    new MutationObserver(scanForMedia).observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+    });
+    window.addEventListener("load", scanForMedia);
+    setInterval(scanForMedia, 2000);
+    scanForMedia();
+  });
+}
+
+async function destroyRoom(id: string) {
+  const room = rooms.get(id);
+  if (!room) return;
+
+  rooms.delete(id);
+  console.log(`Cleaning up room: ${id}`);
+
+  if (room.browser?.streamInterval) clearInterval(room.browser.streamInterval);
+  await room.browser?.context.close().catch(() => {});
+
+  if (room.browser?.userDataDir) {
+    await rm(room.browser.userDataDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 // --- Room Manager Logic ---
 function cleanupRooms() {
   const now = Date.now();
   for (const [id, room] of rooms.entries()) {
     const isInactive = now - room.lastActivity > ROOM_TTL;
     const isEmpty = room.participants.size === 0;
-    const isNew = now - room.createdAt < 1000 * 60 * 5; // 5 min original grace
+    const isUnjoinedTooLong = room.participants.size === 0 && !room.lastEmptyAt && now - room.createdAt > 1000 * 60 * 5;
 
     // Robust empty check: Only delete if been empty for 60 seconds
     const emptyTooLong = room.lastEmptyAt && (now - room.lastEmptyAt > EMPTY_COOLDOWN);
 
-    if (isInactive || (isEmpty && !isNew && emptyTooLong)) {
-      console.log(`Cleaning up room: ${id}`);
-      if (room.browser?.streamInterval) clearInterval(room.browser.streamInterval);
-      room.browser?.context.close().catch(() => {});
-      room.browser?.instance.close().catch(() => {});
-      rooms.delete(id);
+    if (isInactive || isUnjoinedTooLong || (isEmpty && emptyTooLong)) {
+      void destroyRoom(id);
     }
   }
 }
@@ -87,26 +218,22 @@ async function startServer() {
     const roomId = nanoid(12);
 
     try {
-      const browser = await chromium.launch({ 
+      const extensionPaths = getExtensionPaths();
+      const userDataDir = await mkdtemp(path.join(os.tmpdir(), "watchparty-"));
+      const context = await chromium.launchPersistentContext(userDataDir, {
         headless: true,
-        args: [
-          "--no-sandbox", 
-          "--disable-setuid-sandbox", 
-          "--disable-dev-shm-usage",
-          "--disable-blink-features=AutomationControlled", // Mask automation
-          "--use-fake-ui-for-media-stream",
-          "--use-fake-device-for-media-stream"
-        ]
-      });
-
-      const context = await browser.newContext({
-        viewport: { width: 1280, height: 720 },
+        channel: extensionPaths.length > 0 ? "chromium" : undefined,
+        args: getBrowserArgs(extensionPaths),
+        viewport: BROWSER_VIEWPORT,
         userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         deviceScaleFactor: 1,
         isMobile: false,
         hasTouch: false,
         locale: "en-US",
         timezoneId: "America/New_York",
+        permissions: [...BROWSER_PERMISSIONS],
+        ignoreHTTPSErrors: true,
+        acceptDownloads: true,
       });
 
       // Ultra Stealth Masking
@@ -127,6 +254,7 @@ async function startServer() {
       });
 
       const page = await context.newPage();
+      await wireBrowserPage(roomId, page, io);
       await page.goto("https://www.google.com");
 
       const pages = [page];
@@ -151,7 +279,8 @@ async function startServer() {
       const streamInterval = setInterval(async () => {
         if (!rooms.has(roomId)) return clearInterval(streamInterval);
         try {
-          const activePage = pages[activePageIndex];
+          const browserState = rooms.get(roomId)?.browser;
+          const activePage = browserState?.pages[browserState.activePageIndex];
           if (activePage) {
             const buffer = await activePage.screenshot({ type: "jpeg", quality: 40 });
             if (buffer) {
@@ -168,8 +297,8 @@ async function startServer() {
         messages: [],
         createdAt: Date.now(),
         lastActivity: Date.now(),
-        lastEmptyAt: Date.now(),
-        browser: { instance: browser, context, pages, activePageIndex, streamInterval },
+        lastEmptyAt: null,
+        browser: { context, userDataDir, pages, activePageIndex, streamInterval },
       };
 
       rooms.set(roomId, newRoom);
@@ -242,6 +371,7 @@ async function startServer() {
            else if (action === "reload") await activePage.reload();
            else if (action === "new-tab") {
              const newPage = await room.browser.context.newPage();
+             await wireBrowserPage(roomId, newPage, io);
              await newPage.goto("https://www.google.com");
              room.browser.pages.push(newPage);
              room.browser.activePageIndex = room.browser.pages.length - 1;
