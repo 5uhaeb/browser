@@ -45,7 +45,9 @@ const ROOM_TTL = 1000 * 60 * 60; // 1 hour of inactivity
 const EMPTY_COOLDOWN = 1000 * 10; // Remove ended sessions quickly, while tolerating quick reconnects
 const rooms = new Map<string, Room>();
 
-const BROWSER_VIEWPORT = { width: 1280, height: 720 };
+const BROWSER_VIEWPORT = { width: 1024, height: 576 };
+const STREAM_FPS = Math.max(1, Math.min(Number(process.env.STREAM_FPS || 6), 12));
+const STREAM_JPEG_QUALITY = Math.max(20, Math.min(Number(process.env.STREAM_JPEG_QUALITY || 35), 80));
 const BROWSER_PERMISSIONS = [
   "clipboard-read",
   "clipboard-write",
@@ -286,14 +288,14 @@ async function startServer() {
         try {
           const browserState = rooms.get(roomId)?.browser;
           const activePage = browserState?.pages[browserState.activePageIndex];
-          if (activePage) {
-            const buffer = await activePage.screenshot({ type: "jpeg", quality: 40 });
+          if (activePage && !activePage.isClosed()) {
+            const buffer = await activePage.screenshot({ type: "jpeg", quality: STREAM_JPEG_QUALITY });
             if (buffer) {
-              io.to(roomId).emit("stream-frame", buffer.toString("base64"));
+              io.to(roomId).volatile.emit("stream-frame", buffer);
             }
           }
         } catch (e) {}
-      }, 333); // ~3 FPS
+      }, Math.round(1000 / STREAM_FPS));
 
       const newRoom: Room = {
         id: roomId,

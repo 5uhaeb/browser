@@ -17,6 +17,8 @@ interface ChatMessage {
   timestamp: number;
 }
 
+const REMOTE_VIEWPORT = { width: 1024, height: 576 };
+
 export default function RoomPage({ roomId, inviteCode, userName, onLeave }: { roomId: string; inviteCode: string; userName: string; onLeave: () => void }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [participants, setParticipants] = useState<Participant[]>([]);
@@ -29,6 +31,8 @@ export default function RoomPage({ roomId, inviteCode, userName, onLeave }: { ro
   const chatEndRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const audioQueueRef = useRef<string[]>([]);
+  const wheelDeltaRef = useRef({ x: 0, y: 0 });
+  const wheelFrameRef = useRef<number | null>(null);
   const isPlayingAudioRef = useRef(false);
 
   const playNextAudioChunk = () => {
@@ -72,8 +76,13 @@ export default function RoomPage({ roomId, inviteCode, userName, onLeave }: { ro
       if (state.activeIndex !== undefined) setActiveTabIndex(state.activeIndex);
     });
 
-    socket.on("stream-frame", (base64) => {
-      setFrame(`data:image/jpeg;base64,${base64}`);
+    socket.on("stream-frame", (payload: ArrayBuffer | Uint8Array) => {
+      const blob = new Blob([payload], { type: "image/jpeg" });
+      const nextUrl = URL.createObjectURL(blob);
+      setFrame((previousUrl) => {
+        if (previousUrl) URL.revokeObjectURL(previousUrl);
+        return nextUrl;
+      });
     });
 
     socket.on("audio-chunk", (base64) => {
@@ -95,6 +104,11 @@ export default function RoomPage({ roomId, inviteCode, userName, onLeave }: { ro
       socket.off("stream-frame");
       socket.off("audio-chunk");
       socket.off("room-error");
+      if (wheelFrameRef.current !== null) cancelAnimationFrame(wheelFrameRef.current);
+      setFrame((previousUrl) => {
+        if (previousUrl) URL.revokeObjectURL(previousUrl);
+        return null;
+      });
     };
   }, [roomId, userName, onLeave]);
 
@@ -119,15 +133,25 @@ export default function RoomPage({ roomId, inviteCode, userName, onLeave }: { ro
 
   const handleBrowserClick = (e: MouseEvent<HTMLImageElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width) * 1280;
-    const y = ((e.clientY - rect.top) / rect.height) * 720;
+    const x = ((e.clientX - rect.left) / rect.width) * REMOTE_VIEWPORT.width;
+    const y = ((e.clientY - rect.top) / rect.height) * REMOTE_VIEWPORT.height;
     socket.emit("browser-control", { action: "click", data: { x, y } });
   };
 
   const handleWheel = (e: WheelEvent) => {
-    socket.emit("browser-control", { 
-      action: "scroll", 
-      data: { deltaX: e.deltaX, deltaY: e.deltaY } 
+    wheelDeltaRef.current.x += e.deltaX;
+    wheelDeltaRef.current.y += e.deltaY;
+
+    if (wheelFrameRef.current !== null) return;
+
+    wheelFrameRef.current = requestAnimationFrame(() => {
+      const { x, y } = wheelDeltaRef.current;
+      wheelDeltaRef.current = { x: 0, y: 0 };
+      wheelFrameRef.current = null;
+      socket.emit("browser-control", {
+        action: "scroll",
+        data: { deltaX: x, deltaY: y }
+      });
     });
   };
 
@@ -171,7 +195,7 @@ export default function RoomPage({ roomId, inviteCode, userName, onLeave }: { ro
         <div className="flex items-center gap-6">
           <div className="flex items-center gap-3">
              <span className="text-xs text-[#71717A]">Latency: <span className="text-[#A1A1AA]">42ms</span></span>
-             <span className="text-xs text-[#71717A]">Quality: <span className="text-[#A1A1AA]">1080p Source</span></span>
+             <span className="text-xs text-[#71717A]">Quality: <span className="text-[#A1A1AA]">Live Relay</span></span>
              {audioBlocked && (
                <button
                  onClick={unlockAudio}
